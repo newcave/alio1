@@ -80,9 +80,34 @@ def build_driver(headless: bool = True):
     opts = Options()
     if headless:
         opts.add_argument("--headless=new")
+
+    # ── Streamlit Cloud / 컨테이너 필수 플래그 ──
     opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-setuid-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
+    opts.add_argument("--disable-software-rasterizer")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-background-networking")
+    opts.add_argument("--disable-background-timer-throttling")
+    opts.add_argument("--disable-backgrounding-occluded-windows")
+    opts.add_argument("--disable-breakpad")
+    opts.add_argument("--disable-client-side-phishing-detection")
+    opts.add_argument("--disable-default-apps")
+    opts.add_argument("--disable-hang-monitor")
+    opts.add_argument("--disable-ipc-flooding-protection")
+    opts.add_argument("--disable-popup-blocking")
+    opts.add_argument("--disable-prompt-on-repost")
+    opts.add_argument("--disable-renderer-backgrounding")
+    opts.add_argument("--disable-sync")
+    opts.add_argument("--force-color-profile=srgb")
+    opts.add_argument("--metrics-recording-only")
+    opts.add_argument("--no-first-run")
+    opts.add_argument("--enable-automation")
+    opts.add_argument("--password-store=basic")
+    opts.add_argument("--use-mock-keychain")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--remote-debugging-port=9222")
     opts.add_argument("--window-size=1400,900")
     opts.add_argument("--lang=ko-KR")
 
@@ -90,13 +115,10 @@ def build_driver(headless: bool = True):
     if binary:
         opts.binary_location = binary
 
-    # chromedriver 경로 자동 탐색
     driver_path = shutil.which("chromedriver") or "/usr/bin/chromedriver"
     if os.path.exists(driver_path):
         return webdriver.Chrome(service=Service(driver_path), options=opts)
-    # PATH 에 있으면 Service 생략
     return webdriver.Chrome(options=opts)
-
 
 def _session_from_driver(driver) -> requests.Session:
     sess = requests.Session()
