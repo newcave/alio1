@@ -794,6 +794,28 @@ with tab_chat:
         except Exception as e:
             st.error(f"채팅 오류: {e}")
 
+#################################
+st.success("✅ 보고서 분류 및 데이터프레임 생성이 완료되었습니다!")
+
+# ------------------------------------------------------------------
+# [st.download_button 추가 영역]
+# ------------------------------------------------------------------
+# 1. 만약 변환된 최종 데이터프레임 변수명이 `df_classified` 라면:
+csv_data = df_classified.to_csv(index=False).encode('utf-8-sig') # 한글 깨짐 방지를 위해 utf-8-sig 사용
+
+# 화면에 구분선 하나 추가 (선택 사항)
+st.divider()
+
+# 다운로드 버튼 배치
+st.download_button(
+    label="📥 분류 완료된 CSV 결과 다운로드",
+    data=csv_data,
+    file_name="3_classified_reports_20260630.csv",
+    mime="text/csv",
+    key="download-classified-csv"
+)
+#################################
+
 
 # ── 📋 로그 탭 ──────────────────────────────────────────────
 with tab_log:
