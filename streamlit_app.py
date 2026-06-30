@@ -188,4 +188,217 @@ run_preproc = bc2.button("▶ 데이터 전처리 (PDF 파싱)", use_container_w
 run_classify = bc3.button("▶ AI 기술분류", use_container_width=True)
 run_all = bc4.button("⚡ 엔드투엔드 전체 실행", use_container_width=True, type="primary")
 
-log_area, progress_area, status_
+# ▼▼▼ [중요] 에러가 났던 원인! 화면에 빈 구역을 만들어주는 코드가 여기에 반드시 있어야 합니다. ▼▼▼
+log_area, progress_area, status_area = st.empty(), st.empty(), st.empty()
+
+# -- 크롤링
+if run_crawl or run_all:
+    ensure_dir(download_dir)
+    run_with_progress(
+        lambda ol, op: crawler.run(organ_name=org_name, out_dir=download_dir, headless=is_streamlit_cloud(), on_log=ol, on_progress=op),
+        label="크롤링", spinner_text="크롤링 중", log_area=log_area, progress_area=progress_area, status_area=status_area, log_key="log_crawl"
+    )
+    st.rerun()
+
+# -- 데이터 전처리
+if run_preproc or run_all:
+    if count_files(download_dir) == 0:
+        st.warning("⚠️ 파싱할 PDF가 없습니다. '📥 PDF 다운로드/업로드' 탭에서 파일을 먼저 올려주세요.")
+    else:
+        run_with_progress(
+            lambda ol, op: preprocessor.run(pdf_dir=download_dir, csv_out=metadata_csv, on_log=ol, on_progress=op),
+            label="전처리", spinner_text="PDF 메타데이터 추출 중", 
+            log_area=log_area, progress_area=progress_area, status_area=status_area, log_key="log_preprocess"
+        )
+        st.rerun()
+
+# -- AI 기술분류
+if run_classify or run_all:
+    if not Path(metadata_csv).exists() and st.session_state.get("uploaded_metadata_df") is not None:
+        ensure_dir(Path(metadata_csv).parent)
+        st.session_state.uploaded_metadata_df.to_csv(metadata_csv, index=False, encoding="utf-8-sig")
+
+    if not Path(metadata_csv).exists():
+        st.warning("⚠️ 메타데이터 소스가 없습니다. 전처리를 먼저 수행하세요.")
+    elif not get_openai_key():
+        st.error("OpenAI API 키를 확인할 수 없습니다. `.streamlit/secrets.toml`을 확인하세요.")
+    else:
+        run_with_progress(
+            lambda ol, op: classifier.run(input_csv=metadata_csv, output_csv=classified_csv, api_key=get_openai_key(), on_log=ol, on_progress=op),
+            label="AI 기술분류", spinner_text="GPT-4o 분류 매핑 중", 
+            log_area=log_area, progress_area=progress_area, status_area=status_area, log_key="log_classify"
+        )
+        st.rerun()
+
+
+# ────────────────────────────────────────────────────────────
+# 6. 결과 확인 및 조작 탭
+# ────────────────────────────────────────────────────────────
+st.markdown("---")
+tab_help, tab_pdf, tab_meta, tab_class, tab_chat, tab_log = st.tabs([
+    "❓ 사용방법", "📥 PDF 다운로드/업로드", "📄 메타데이터 (Step 2)", "📊 분류 결과 (Step 3)", "💬 AI 현황 분석 챗", "📋 실시간 로그"
+])
+
+# ----------------- [탭 1] 사용방법 -----------------
+with tab_help:
+    st.markdown("""
+    ### 파이프라인 이용 안내
+    1. **크롤링 또는 업로드**: ALIO에서 크롤링(Selenium)을 하거나, 아래 **[📥 PDF 다운로드/업로드]** 탭에 로컬 PDF를 끌어다 놓으세요.
+    2. **데이터 전처리**: 상단의 버튼을 누르면 PDF에서 메타데이터(제목, 저자, 날짜, 요약)를 추출해 CSV로 저장합니다.
+    3. **AI 분류**: OpenAI API를 통해 K-water 기술분류체계에 맞게 자동으로 분류합니다.
+    4. 문제가 생길 경우 탭 곳곳에 마련된 '(비상용) 직접 주입하기' 기능으로 기존 데이터를 복구할 수 있습니다.
+    """)
+
+# ----------------- [탭 2] PDF 관리 -----------------
+with tab_pdf:
+    st.markdown("### 📥 PDF 파일 업로드 및 관리")
+    st.caption("크롤링 없이 수동으로 파이프라인을 돌리려면 여기에 PDF를 업로드하고 상단의 **'▶ 데이터 전처리'**를 누르세요.")
+    
+    uploaded_pdfs = st.file_uploader("PDF 파일 업로드 (다중 선택 가능)", type=["pdf"], accept_multiple_files=True, key="pdf_uploader")
+    if uploaded_pdfs:
+        ensure_dir(download_dir)
+        saved_count = 0
+        for f in uploaded_pdfs:
+            out = Path(download_dir) / f.name
+            out.write_bytes(f.read())
+            saved_count += 1
+        st.success(f"✅ {saved_count}개 PDF 업로드 완료! 상단의 **'▶ 데이터 전처리 (PDF 파싱)'** 버튼을 눌러주세요.")
+        st.rerun()
+
+    pdf_files = list_files(download_dir, exts=(".pdf", ".hwp", ".hwpx", ".docx"))
+    st.markdown(f"#### 수집/업로드된 보고서: **{len(pdf_files)}개**")
+    
+    if pdf_files:
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            if st.button("📦 전체 ZIP 묶어받기", use_container_width=True):
+                with st.spinner("ZIP 생성 중..."):
+                    st.session_state["zip_cache"] = make_zip_bytes(pdf_files, base_folder=download_dir)
+                    st.session_state["zip_name"] = f"pdfs_{TODAY}_{len(pdf_files)}files.zip"
+        with c2:
+            if "zip_cache" in st.session_state:
+                st.download_button(
+                    f"💾 {st.session_state['zip_name']} 다운로드",
+                    data=st.session_state["zip_cache"],
+                    file_name=st.session_state["zip_name"],
+                    mime="application/zip", use_container_width=True
+                )
+        for i, f in enumerate(pdf_files[:20], start=1):
+            st.markdown(f"- `{f.name}` ({human_size(f.stat().st_size)})")
+        if len(pdf_files) > 20:
+            st.caption(f"...외 {len(pdf_files) - 20}개 파일 생략됨")
+
+# ----------------- [탭 3] 메타데이터 -----------------
+with tab_meta:
+    st.markdown("### 📄 추출 메타데이터 검조")
+    
+    df_meta = None
+    if Path(metadata_csv).exists():
+        df_meta = pd.read_csv(metadata_csv, encoding="utf-8-sig")
+    elif st.session_state.get("uploaded_metadata_df") is not None:
+        df_meta = st.session_state.uploaded_metadata_df
+
+    if df_meta is not None:
+        st.markdown(f"현재 추출된 데이터: **{len(df_meta)}건**")
+        st.dataframe(df_meta, use_container_width=True, height=400)
+        st.download_button(
+            "📥 메타데이터 CSV 다운로드", 
+            data=df_meta.to_csv(index=False).encode("utf-8-sig"), 
+            file_name=Path(metadata_csv).name, mime="text/csv"
+        )
+    else:
+        st.info("💡 파싱된 데이터가 없습니다. PDF를 업로드한 뒤 파싱을 진행하세요.")
+
+    with st.expander("🛠️ (비상용) 기존에 파싱해둔 CSV 직접 주입하기"):
+        meta_uploader = st.file_uploader("로컬 전처리 CSV 업로드", type=["csv"], key="meta_csv_uploader")
+        if meta_uploader is not None:
+            st.session_state.uploaded_metadata_df = pd.read_csv(meta_uploader, encoding="utf-8-sig")
+            st.success("데이터가 마운트되었습니다. 상단의 **▶ AI 기술분류**를 실행할 수 있습니다.")
+            st.rerun()
+
+# ----------------- [탭 4] 분류 결과 -----------------
+with tab_class:
+    st.markdown("### 📊 AI 기술분류 결과")
+    
+    df_class = None
+    if Path(classified_csv).exists():
+        df_class = pd.read_csv(classified_csv, encoding="utf-8-sig")
+    elif st.session_state.get("uploaded_classified_df") is not None:
+        df_class = st.session_state.uploaded_classified_df
+
+    if df_class is not None:
+        st.markdown(f"총 **{len(df_class)}건**의 최종 매핑 데이터 보관 중")
+        st.dataframe(df_class, use_container_width=True, height=400)
+        st.download_button(
+            "📥 분류 결과 CSV 다운로드", 
+            data=df_class.to_csv(index=False).encode("utf-8-sig"), 
+            file_name=Path(classified_csv).name, mime="text/csv"
+        )
+    else:
+        st.info("💡 AI 분류 결과가 없습니다. 파이프라인 STEP 03을 실행하세요.")
+        
+    with st.expander("🛠️ (비상용) 최종 AI 분류 완료 CSV 주입하기"):
+        class_uploader = st.file_uploader("최종 AI 분류 CSV", type=["csv"], key="class_csv_uploader")
+        if class_uploader is not None:
+            st.session_state.uploaded_classified_df = pd.read_csv(class_uploader, encoding="utf-8-sig")
+            st.success("데이터 마운트 완료. 챗봇을 즉시 사용할 수 있습니다.")
+            st.rerun()
+
+# ----------------- [탭 5] AI 챗봇 -----------------
+with tab_chat:
+    active_df = df_class if 'df_class' in locals() and df_class is not None else None
+    if active_df is not None:
+        from openai import OpenAI
+        
+        st.markdown(f"#### 💬 {org_name} 가상 데이터 지능형 질의응답 (GPT-4o)")
+        
+        if not get_openai_key():
+            st.error("API 키가 없어 챗봇을 시작할 수 없습니다.")
+        else:
+            client = OpenAI(api_key=get_openai_key())
+            
+            # 컨텍스트 축소 (토큰 절약)
+            df_ctx = active_df.copy()
+            if "summary_kr" in df_ctx.columns:
+                df_ctx["summary_kr"] = df_ctx["summary_kr"].astype(str).str[:100]
+            data_ctx = df_ctx.to_csv(index=False)
+            
+            system_prompt = (
+                "당신은 K-water 연구보고서 데이터를 분석하는 전문 어시스턴트입니다.\n"
+                "아래는 수집된 연구보고서 목록(CSV)입니다. 이 데이터를 바탕으로 정확히 답변하세요.\n"
+                f"[보고서 데이터]\n{data_ctx}"
+            )
+
+            for msg in st.session_state.chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            user_input = st.chat_input("보고서 목록에 대해 물어보세요...")
+            if user_input:
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                with st.chat_message("user"):
+                    st.markdown(user_input)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("답변 준비 중..."):
+                        messages = [{"role": "system", "content": system_prompt}] + st.session_state.chat_history[-10:]
+                        resp = client.chat.completions.create(
+                            model="gpt-4o", messages=messages, max_tokens=1000, temperature=0.3
+                        )
+                        answer = resp.choices[0].message.content
+                    st.markdown(answer)
+                    st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                    
+            if st.session_state.chat_history:
+                if st.button("🗑️ 대화 초기화"):
+                    st.session_state.chat_history = []
+                    st.rerun()
+    else:
+        st.info("분류 결과 데이터가 없습니다. 먼저 파이프라인을 실행하거나 CSV를 주입해주세요.")
+
+# ----------------- [탭 6] 로그 확인 -----------------
+with tab_log:
+    lt1, lt2, lt3 = st.tabs(["크롤링 로그", "전처리 로그", "분류 로그"])
+    with lt1: st.markdown(f'<div class="log-box">{st.session_state.log_crawl or "기록 없음"}</div>', unsafe_allow_html=True)
+    with lt2: st.markdown(f'<div class="log-box">{st.session_state.log_preprocess or "기록 없음"}</div>', unsafe_allow_html=True)
+    with lt3: st.markdown(f'<div class="log-box">{st.session_state.log_classify or "기록 없음"}</div>', unsafe_allow_html=True)
